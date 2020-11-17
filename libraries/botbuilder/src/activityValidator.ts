@@ -32,5 +32,8 @@ export function validateAndFixActivity(activity: Activity): Activity {
         (activity as ActivityTimestamps).rawLocalTimestamp = activity.localTimestamp;
         activity.localTimestamp = new Date(activity.localTimestamp);
     }
+    if (typeof activity.localTimezone !== 'string') {
+        activity.localTimezone = 'foo';
+    }
     return activity;
 }

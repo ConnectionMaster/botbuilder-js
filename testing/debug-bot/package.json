@@ -1,0 +1,14 @@
+{
+  "name": "debug-bot",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "lint": "eslint . --ext .js,.ts",
+    "start": "ts-node src/index.ts"
+  },
+  "dependencies": {
+    "botbuilder": "4.1.6",
+    "dotenv": "^8.2.0",
+    "restify": "^8.5.1"
+  }
+}

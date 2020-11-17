@@ -1320,11 +1320,11 @@ export class BotFrameworkAdapter
         for (let i = 0; i < activities.length; i++) {
             const activity: Partial<Activity> = activities[i];
             switch (activity.type) {
-                case 'delay':
+                case ActivityTypes.Delay:
                     await delay(typeof activity.value === 'number' ? activity.value : 1000);
                     responses.push({} as ResourceResponse);
                     break;
-                case 'invokeResponse':
+                case ActivityTypes.InvokeResponse:
                     // Cache response to context object. This will be retrieved when turn completes.
                     context.turnState.set(INVOKE_RESPONSE_KEY, activity);
                     responses.push({} as ResourceResponse);
