@@ -3,38 +3,32 @@
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-import * as t from 'runtypes';
+import * as z from 'zod';
 import fs from 'fs';
 import mime from 'mime';
 import path from 'path';
 import type { AzureFunction, Context, HttpRequest } from '@azure/functions';
 import { Configuration, getRuntimeServices } from 'botbuilder-dialogs-adaptive-runtime';
 import { ServiceCollection } from 'botbuilder-dialogs-adaptive-runtime-core';
+import type { Activity, ActivityHandlerBase, BotFrameworkHttpAdapter, ChannelServiceHandler } from 'botbuilder';
+import type { Response } from 'botbuilder/lib/interfaces';
 
-import type {
-    Activity,
-    ActivityHandlerBase,
-    BotFrameworkAdapter,
-    ChannelServiceHandler,
-    WebResponse,
-} from 'botbuilder';
-
-const TypedOptions = t.Record({
+const TypedOptions = z.object({
     /**
      * Log errors to stderr
      */
-    logErrors: t.Boolean,
+    logErrors: z.boolean(),
 
     /**
      * Path inside applicationRoot that should be served as static files
      */
-    staticDirectory: t.String.withConstraint((str) => str.length > 0 || 'must be non-empty string'),
+    staticDirectory: z.string().refine((str) => str.length > 0, { message: 'must be non-empty string' }),
 });
 
 /**
  * Options for runtime Azure Functions adapter
  */
-export type Options = t.Static<typeof TypedOptions>;
+export type Options = z.infer<typeof TypedOptions>;
 
 const defaultOptions: Options = {
     logErrors: true,
@@ -70,16 +64,16 @@ export function makeTriggers(
     applicationRoot: string,
     options: Partial<Options> = {}
 ): Record<string, AzureFunction> {
-    const resolvedOptions = TypedOptions.check(Object.assign({}, defaultOptions, options));
+    const resolvedOptions = TypedOptions.parse(Object.assign({}, defaultOptions, options));
 
     const build = memoize(async () => {
         const [services, configuration] = await runtimeServices();
 
         const instances = services.mustMakeInstances<{
-            adapter: BotFrameworkAdapter;
+            adapter: BotFrameworkHttpAdapter;
             bot: ActivityHandlerBase;
             channelServiceHandler: ChannelServiceHandler;
-            customAdapters: Map<string, BotFrameworkAdapter>;
+            customAdapters: Map<string, BotFrameworkHttpAdapter>;
         }>('adapter', 'bot', 'channelServiceHandler', 'customAdapters');
 
         return { configuration, instances };
@@ -91,7 +85,7 @@ export function makeTriggers(
         messageTrigger: async (context: Context, req: HttpRequest) => {
             context.log('Messages endpoint triggered.');
 
-            const res = context.res as WebResponse;
+            const res = context.res as Response;
 
             try {
                 const route = context.bindingData.route;
@@ -107,11 +101,11 @@ export function makeTriggers(
                 const adapterSettings =
                     configuration.type(
                         ['runtimeSettings', 'adapters'],
-                        t.Array(
-                            t.Record({
-                                name: t.String,
-                                enabled: t.Boolean.optional(),
-                                route: t.String,
+                        z.array(
+                            z.object({
+                                name: z.string(),
+                                enabled: z.boolean().optional(),
+                                route: z.string(),
                             })
                         )
                     ) ?? [];
@@ -134,9 +128,17 @@ export function makeTriggers(
                     return;
                 }
 
-                await resolvedAdapter.processActivity(req, res, async (turnContext) => {
-                    await bot.run(turnContext);
-                });
+                await resolvedAdapter.process(
+                    {
+                        headers: req.headers,
+                        body: req.body,
+                        method: req.method ?? undefined,
+                    },
+                    res,
+                    async (turnContext) => {
+                        await bot.run(turnContext);
+                    }
+                );
             } catch (err) {
                 if (resolvedOptions.logErrors) {
                     context.log.error(err);
@@ -168,7 +170,7 @@ export function makeTriggers(
                     activity
                 );
 
-                const res = context.res as WebResponse;
+                const res = context.res as Response;
                 res.status(200);
                 res.send(result);
                 res.end();

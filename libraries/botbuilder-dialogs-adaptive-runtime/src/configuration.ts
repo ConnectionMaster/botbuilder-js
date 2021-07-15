@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-import * as t from 'runtypes';
+import * as z from 'zod';
 import yargs from 'yargs-parser';
 import { Configuration as CoreConfiguration } from 'botbuilder-dialogs-adaptive-runtime-core';
 import { Provider } from 'nconf';
@@ -9,10 +9,23 @@ import { Provider } from 'nconf';
 /**
  * Configuration implements the [IConfiguration](xref:botbuilder-dialogs-adaptive-runtime-core.IConfiguration)
  * interface and adds helper methods for setting values, layering sources, and getting type checked values.
+ *
+ * @internal
  */
 export class Configuration implements CoreConfiguration {
     private prefix: string[] = [];
     private provider = new Provider().use('memory');
+
+    /**
+     * Create a configuration instance
+     *
+     * @param initialValues Optional set of default values to provide
+     */
+    constructor(initialValues?: Record<string, unknown>) {
+        if (initialValues) {
+            Object.entries(initialValues).forEach(([key, value]) => this.provider.set(key, value));
+        }
+    }
 
     /**
      * Bind a path to a Configuration instance such that calls to get or set will
@@ -30,8 +43,8 @@ export class Configuration implements CoreConfiguration {
         return configuration;
     }
 
-    private key(path: string[]): string {
-        return this.prefix.concat(path).join(':');
+    private key(path: string[] | null): string {
+        return this.prefix.concat(path ?? []).join(':');
     }
 
     /**
@@ -40,13 +53,10 @@ export class Configuration implements CoreConfiguration {
      * @param path path to value
      * @returns the value, or undefined
      */
-    get(path: string[]): unknown | undefined {
-        // Note: empty path should yield the entire configuration
-        if (!path.length) {
-            return this.provider.get();
-        }
-
-        return this.provider.get(this.key(path));
+    get<T = unknown>(path: string[] = []): T | undefined {
+        // Note: `|| undefined` ensures that empty string is coerced to undefined
+        // which ensures nconf returns the entire merged configuration.
+        return this.provider.get(this.key(path) || undefined);
     }
 
     /**
@@ -56,6 +66,10 @@ export class Configuration implements CoreConfiguration {
      * @param value value to set
      */
     set(path: string[], value: unknown): void {
+        if (!path.length) {
+            throw new Error('`path` must be non-empty');
+        }
+
         this.provider.set(this.key(path), value);
     }
 
@@ -133,7 +147,7 @@ export class Configuration implements CoreConfiguration {
      * @returns true or false depending on flag
      */
     bool(path: string[]): boolean {
-        return this.type(path, t.Boolean) === true;
+        return this.type(path, z.boolean()) === true;
     }
 
     /**
@@ -143,26 +157,22 @@ export class Configuration implements CoreConfiguration {
      * @returns the string or undefined
      */
     string(path: string[]): string | undefined {
-        return this.type(path, t.String);
+        return this.type(path, z.string());
     }
 
     /**
      * Get a typed value from config
      *
      * @param path path to value
-     * @param runtype runtype to use for type checking
+     * @param t zod type to use for type checking
      * @returns the value, or undefined
      */
-    type<T>(path: string[], runtype: t.Runtype<T>): T | undefined {
-        const value = this.get(path);
-
+    type<T>(path: string[], t: z.ZodType<T>): T | undefined {
         try {
-            return runtype.optional().check(value);
+            return t.optional().parse(this.get(path));
         } catch (err) {
-            if (err instanceof t.ValidationError) {
-                err.details ??= {
-                    [this.prefix.concat(path).join('.')]: err.message,
-                };
+            if (z.instanceof(z.ZodError).check(err)) {
+                err.errors.forEach((error) => (error.path = [...this.prefix, ...path, ...error.path]));
             }
 
             throw err;

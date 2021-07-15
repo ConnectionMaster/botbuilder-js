@@ -11,35 +11,39 @@ import { HeaderSerializer } from '../payloads/headerSerializer';
 import { SubscribableStream } from '../subscribableStream';
 import { PayloadConstants } from '../payloads/payloadConstants';
 import { TransportDisconnectedEvent } from './transportDisconnectedEvent';
-import { ITransportReceiver } from '../interfaces/ITransportReceiver';
-import { IHeader } from '../interfaces/IHeader';
-import { INodeBuffer } from '../interfaces/INodeBuffer';
+import { IHeader, INodeBuffer, ITransportReceiver } from '../interfaces';
 
 /**
  * Payload receiver for streaming.
  */
 export class PayloadReceiver {
-    public isConnected: boolean;
-    public disconnected: TransportDisconnectedEventHandler = function (sender, events) {};
+    disconnected?: TransportDisconnectedEventHandler;
+
     private _receiver: ITransportReceiver;
     private _receiveHeaderBuffer: INodeBuffer;
     private _receivePayloadBuffer: INodeBuffer;
+
     private _getStream: (header: IHeader) => SubscribableStream;
     private _receiveAction: (header: IHeader, stream: SubscribableStream, length: number) => void;
+
+    /**
+     * Get current connected state
+     *
+     * @returns true if connected to a transport sender.
+     */
+    get isConnected(): boolean {
+        return this._receiver != null;
+    }
 
     /**
      * Connects to a transport receiver
      *
      * @param receiver The [ITransportReceiver](xref:botframework-streaming.ITransportReceiver) object to pull incoming data from.
+     * @returns a promise that resolves when the receiver is complete
      */
-    public connect(receiver: ITransportReceiver): void {
-        if (this.isConnected) {
-            throw new Error('Already connected.');
-        } else {
-            this._receiver = receiver;
-            this.isConnected = true;
-            this.runReceive();
-        }
+    connect(receiver: ITransportReceiver): Promise<void> {
+        this._receiver = receiver;
+        return this.receivePackets();
     }
 
     /**
@@ -48,7 +52,7 @@ export class PayloadReceiver {
      * @param getStream Callback when a new stream has been received.
      * @param receiveAction Callback when a new message has been received.
      */
-    public subscribe(
+    subscribe(
         getStream: (header: IHeader) => SubscribableStream,
         receiveAction: (header: IHeader, stream: SubscribableStream, count: number) => void
     ): void {
@@ -59,42 +63,25 @@ export class PayloadReceiver {
     /**
      * Force this receiver to disconnect.
      *
-     * @param e Event arguments to include when broadcasting disconnection event.
+     * @param event Event arguments to include when broadcasting disconnection event.
      */
-    public disconnect(e?: TransportDisconnectedEvent): void {
-        let didDisconnect;
+    disconnect(event = TransportDisconnectedEvent.Empty): void {
+        if (!this.isConnected) {
+            return;
+        }
+
         try {
-            if (this.isConnected) {
-                this._receiver.close();
-                didDisconnect = true;
-                this.isConnected = false;
-            }
-        } catch (error) {
-            this.isConnected = false;
-            this.disconnected(this, new TransportDisconnectedEvent(error.message));
-        }
-        this._receiver = null;
-        this.isConnected = false;
-
-        if (didDisconnect) {
-            this.disconnected(this, e || TransportDisconnectedEvent.Empty);
+            this._receiver.close();
+            this.disconnected?.(this, event);
+        } catch (err) {
+            this.disconnected?.(this, new TransportDisconnectedEvent(err.message));
+        } finally {
+            this._receiver = null;
         }
     }
 
-    /**
-     * @private
-     */
-    private runReceive(): void {
-        this.receivePackets().catch();
-    }
-
-    /**
-     * @private
-     */
     private async receivePackets(): Promise<void> {
-        let isClosed;
-
-        while (this.isConnected && !isClosed) {
+        while (this.isConnected) {
             try {
                 let readSoFar = 0;
                 while (readSoFar < PayloadConstants.MaxHeaderLength) {
@@ -137,9 +124,8 @@ export class PayloadReceiver {
                         this._receiveAction(header, contentStream, bytesActuallyRead);
                     }
                 }
-            } catch (error) {
-                isClosed = true;
-                this.disconnect(new TransportDisconnectedEvent(error.message));
+            } catch (err) {
+                this.disconnect(new TransportDisconnectedEvent(err.message));
             }
         }
     }

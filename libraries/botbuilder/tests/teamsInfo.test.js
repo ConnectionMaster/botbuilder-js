@@ -1,10 +1,10 @@
 const assert = require('assert');
 const nock = require('nock');
 const sinon = require('sinon');
-const { BotFrameworkAdapter, TeamsInfo } = require('../');
+const { BotFrameworkAdapter, TeamsInfo, CloudAdapter } = require('../');
 const { Conversations } = require('botframework-connector/lib/connectorApi/operations');
-const { MicrosoftAppCredentials, ConnectorClient } = require('botframework-connector');
-const { TurnContext, MessageFactory, ActionTypes } = require('botbuilder-core');
+const { MicrosoftAppCredentials, ConnectorClient, ServiceClientCredentialsFactory, PasswordServiceClientCredentialFactory } = require('botframework-connector');
+const { TurnContext, MessageFactory, ActionTypes, BotAdapter, Channels } = require('botbuilder-core');
 
 class TeamsInfoAdapter extends BotFrameworkAdapter {
     constructor() {
@@ -13,8 +13,43 @@ class TeamsInfoAdapter extends BotFrameworkAdapter {
 }
 
 class TestContext extends TurnContext {
-    constructor(activity) {
-        super(new TeamsInfoAdapter(), activity);
+    constructor(activity, adapter) {
+        super(adapter || new TeamsInfoAdapter(), activity);
+    }
+}
+
+class TestCreateConversationAdapter extends CloudAdapter {
+    appId;
+    channelId;
+    serviceUrl;
+    audience;
+    conversationParameters;
+
+    constructor(activityId, conversationId) {
+        super();
+        this.activityId = activityId;
+        this.conversationId = conversationId;
+    }
+
+    async createConversationAsync(botAppId, channelId, serviceUrl, audience, conversationParameters, callback) {
+        this.appId = botAppId;
+        this.channelId = channelId;
+        this.serviceUrl = serviceUrl;
+        this.audience = audience;
+        this.conversationParameters = conversationParameters;
+
+        const activity = {
+            id: this.activityId,
+            conversation: {
+                id: this.conversationId,
+            },
+        };
+
+        const mockTurnContext = {
+            activity,
+        };
+
+        callback(mockTurnContext);
     }
 }
 
@@ -147,6 +182,10 @@ const teamActivity = {
 };
 
 describe('TeamsInfo', function () {
+    const connectorClient = new ConnectorClient(new MicrosoftAppCredentials('abc', '123'), {
+        baseUri: 'https://smba.trafficmanager.net/amer/',
+    });
+
     beforeEach(function () {
         nock.cleanAll();
     });
@@ -196,6 +235,37 @@ describe('TeamsInfo', function () {
             assert(Array.isArray(response));
             assert(newConversation[0]['activityid'] == 'activityid123');
             assert(newConversation[1] == 'resourceresponseid');
+        });
+
+        it('should work with correct information when using botAppId', async function () {
+            const adapter = new TestCreateConversationAdapter(teamActivity.id, teamActivity.conversation.id);
+            const expectedAppId = '1234-5678-1234-5678';
+
+            const context = new TestContext(teamActivity, adapter);
+            const msg = MessageFactory.text('test message');
+            msg.channelId = Channels.Msteams;
+            msg.channelData = {
+                team: {
+                    id: 'team-id',
+                },
+            };
+            const teamChannelId = '19%3AgeneralChannelIdgeneralChannelId%40thread.skype';
+
+            const response = await TeamsInfo.sendMessageToTeamsChannel(context, msg, teamChannelId, expectedAppId);
+
+            assert(Array.isArray(response));
+            assert.strictEqual(response[0].conversation.id, teamActivity.conversation.id);
+            assert.strictEqual(response[1], teamActivity.id);
+            assert.strictEqual(adapter.appId, expectedAppId);
+            assert.strictEqual(adapter.channelId, Channels.Msteams);
+            assert.strictEqual(adapter.serviceUrl, teamActivity.serviceUrl);
+            assert.strictEqual(adapter.audience, null);
+
+            const channelData = adapter.conversationParameters.channelData;
+            const id = channelData.channel.id;
+
+            assert.strictEqual(id, teamChannelId);
+            assert.deepStrictEqual(msg, adapter.conversationParameters.activity);
         });
 
         it('should error if context is null', async function () {
@@ -276,6 +346,7 @@ describe('TeamsInfo', function () {
                 .reply(200, { conversations });
 
             const context = new TestContext(teamActivity);
+            context.turnState.set(context.adapter.ConnectorClientKey, connectorClient);
             const channels = await TeamsInfo.getTeamChannels(context);
 
             assert(fetchOauthToken.isDone());
@@ -315,6 +386,7 @@ describe('TeamsInfo', function () {
                 .reply(200, { conversations });
 
             const context = new TestContext(teamActivity);
+            context.turnState.set(context.adapter.ConnectorClientKey, connectorClient);
             const channels = await TeamsInfo.getTeamChannels(context, '19:ChannelIdgeneralChannelId@thread.skype');
 
             assert(fetchOauthToken.isDone());
@@ -365,6 +437,7 @@ describe('TeamsInfo', function () {
                 .reply(200, teamDetails);
 
             const context = new TestContext(teamActivity);
+            context.turnState.set(context.adapter.ConnectorClientKey, connectorClient);
             const fetchedTeamDetails = await TeamsInfo.getTeamDetails(context);
 
             assert(fetchOauthToken.isDone());
@@ -391,6 +464,7 @@ describe('TeamsInfo', function () {
                 .reply(200, teamDetails);
 
             const context = new TestContext(teamActivity);
+            context.turnState.set(context.adapter.ConnectorClientKey, connectorClient);
             const fetchedTeamDetails = await TeamsInfo.getTeamDetails(
                 context,
                 '19:ChannelIdgeneralChannelId@thread.skype'
@@ -429,6 +503,7 @@ describe('TeamsInfo', function () {
                 .reply(200, members);
 
             const context = new TestContext(oneOnOneActivity);
+            context.turnState.set(context.adapter.ConnectorClientKey, connectorClient);
             const fetchedMembers = await TeamsInfo.getMembers(context);
 
             assert(fetchOauthToken.isDone());
@@ -482,6 +557,7 @@ describe('TeamsInfo', function () {
                 .reply(200, members);
 
             const context = new TestContext(groupChatActivity);
+            context.turnState.set(context.adapter.ConnectorClientKey, connectorClient);
             const fetchedMembers = await TeamsInfo.getMembers(context);
 
             assert(fetchOauthToken.isDone());
@@ -525,6 +601,7 @@ describe('TeamsInfo', function () {
                 .reply(200, members);
 
             const context = new TestContext(teamActivity);
+            context.turnState.set(context.adapter.ConnectorClientKey, connectorClient);
             const fetchedMembers = await TeamsInfo.getMembers(context);
 
             assert(fetchOauthToken.isDone());
@@ -538,6 +615,7 @@ describe('TeamsInfo', function () {
 
         it('should not work if conversationId is falsey', async function () {
             const context = new TestContext(oneOnOneActivity);
+            context.turnState.set(context.adapter.ConnectorClientKey, connectorClient);
             context.activity.conversation.id = undefined;
 
             await assert.rejects(TeamsInfo.getMembers(context), (err) => {
@@ -569,6 +647,7 @@ describe('TeamsInfo', function () {
                 .reply(200, member);
 
             const context = new TestContext(oneOnOneActivity);
+            context.turnState.set(context.adapter.ConnectorClientKey, connectorClient);
             const fetchedMember = await TeamsInfo.getMember(context, oneOnOneActivity.from.id);
 
             assert(fetchOauthToken.isDone());
@@ -597,6 +676,7 @@ describe('TeamsInfo', function () {
                 .reply(200, member);
 
             const context = new TestContext(teamActivity);
+            context.turnState.set(context.adapter.ConnectorClientKey, connectorClient);
             const fetchedMember = await TeamsInfo.getMember(context, teamActivity.from.id);
 
             assert(fetchOauthToken.isDone());
@@ -619,6 +699,7 @@ describe('TeamsInfo', function () {
 
     describe('getMeetingParticipant', function () {
         const context = new TestContext(teamActivity);
+        context.turnState.set(context.adapter.ConnectorClientKey, connectorClient);
 
         it('should work with correct arguments', async function () {
             const participant = {
@@ -658,6 +739,104 @@ describe('TeamsInfo', function () {
 
         it('should throw error for missing context', async function () {
             await assert.rejects(TeamsInfo.getMeetingParticipant(), Error('context is required.'));
+        });
+    });
+
+    describe('getMeetingInfo', function () {
+        const context = new TestContext(teamActivity);
+        context.turnState.set(context.adapter.ConnectorClientKey, connectorClient);
+
+        it('should work with correct arguments-meetingId in context', async function () {
+            const details = {
+                organizer: {
+                    id: teamActivity.from.id,
+                    name: teamActivity.from.name,
+                    objectId: 'User-One-Object-Id',
+                    givenName: 'User',
+                    surname: 'One',
+                    email: 'User.One@microsoft.com',
+                    userPrincipalName: 'user1@microsoft.com',
+                    tenantId: teamActivity.conversation.tenantId,
+                },
+                details: {
+                    id: 'meeting-id',
+                    msGraphResourceId: 'msGraph-id',
+                    scheduledStartTime: new Date('Thu Jun 10 2021 15:02:32 GMT-0700'),
+                    scheduledEndTime: new Date('Thu Jun 10 2021 16:02:32 GMT-0700'),
+                    joinUrl: 'https://teams.microsoft.com/l/meetup-join/someEncodedMeetingString',
+                    title: 'Fake meeting',
+                    type: 'Scheduled',
+                },
+                conversation: {
+                    id: teamActivity.conversation.id,
+                },
+            };
+
+            const { expectedAuthHeader, expectation: fetchOauthToken } = nockOauth();
+
+            const fetchExpectation = nock('https://smba.trafficmanager.net/amer')
+                .get('/v1/meetings/19%3AmeetingId')
+                .matchHeader('Authorization', expectedAuthHeader)
+                .reply(200, details);
+
+            const fetchedDetails = await TeamsInfo.getMeetingInfo(context);
+
+            assert(fetchOauthToken.isDone());
+            assert(fetchExpectation.isDone());
+
+            assert.deepStrictEqual(fetchedDetails, details);
+        });
+
+        it('should work with correct arguments-meetingId passed in', async function () {
+            const context = new TestContext(teamActivity);
+            context.turnState.set(context.adapter.ConnectorClientKey, connectorClient);
+
+            const details = {
+                organizer: {
+                    id: teamActivity.from.id,
+                    name: teamActivity.from.name,
+                    objectId: 'User-One-Object-Id',
+                    givenName: 'User',
+                    surname: 'One',
+                    email: 'User.One@microsoft.com',
+                    userPrincipalName: 'user1@microsoft.com',
+                    tenantId: teamActivity.conversation.tenantId,
+                },
+                details: {
+                    id: 'meeting-id',
+                    msGraphResourceId: 'msGraph-id',
+                    scheduledStartTime: new Date('Thu Jun 10 2021 15:02:32 GMT-0700'),
+                    scheduledEndTime: new Date('Thu Jun 10 2021 16:02:32 GMT-0700'),
+                    joinUrl: 'https://teams.microsoft.com/l/meetup-join/someEncodedMeetingString',
+                    title: 'Fake meeting',
+                    type: 'Scheduled',
+                },
+                conversation: {
+                    id: teamActivity.conversation.id,
+                },
+            };
+
+            const { expectedAuthHeader, expectation: fetchOauthToken } = nockOauth();
+
+            const fetchExpectation = nock('https://smba.trafficmanager.net/amer')
+                .get('/v1/meetings/meeting-id')
+                .matchHeader('Authorization', expectedAuthHeader)
+                .reply(200, details);
+
+            const fetchedDetails = await TeamsInfo.getMeetingInfo(context, details.details.id);
+
+            assert(fetchOauthToken.isDone());
+            assert(fetchExpectation.isDone());
+
+            assert.deepStrictEqual(fetchedDetails, details);
+        });
+
+        it('should throw error for missing context', async function () {
+            await assert.rejects(TeamsInfo.getMeetingInfo(), Error('context is required.'));
+        });
+
+        it('should throw error for missing meetingId', async function () {
+            await assert.rejects(TeamsInfo.getMeetingInfo({ activity: {} }), Error('meetingId or TurnContext containing meetingId is required.'));
         });
     });
 
@@ -712,6 +891,7 @@ describe('TeamsInfo', function () {
                 .reply(200, members);
 
             const context = new TestContext(teamActivity);
+            context.turnState.set(context.adapter.ConnectorClientKey, connectorClient);
             const fetchedMembers = await TeamsInfo.getTeamMembers(context);
 
             assert(fetchOauthToken.isDone());
@@ -755,6 +935,7 @@ describe('TeamsInfo', function () {
                 .reply(200, members);
 
             const context = new TestContext(teamActivity);
+            context.turnState.set(context.adapter.ConnectorClientKey, connectorClient);
             const fetchedMembers = await TeamsInfo.getTeamMembers(context, '19:ChannelIdgeneralChannelId@thread.skype');
 
             assert(fetchOauthToken.isDone());
@@ -776,11 +957,11 @@ describe('TeamsInfo', function () {
                 );
             });
 
-            it(`should error if the adapter doesn't have a createConnectorClient method`, function () {
-                assert.rejects(
-                    () => TeamsInfo.getConnectorClient({ adapter: {} }),
-                    new Error('This method requires a connector client.')
-                );
+            it(`should fallback to the connectorClient on turnState if adapter doesn't exist in context.adapter`, function () {
+                const context = new TurnContext({});
+                context.turnState.set(context.adapter.ConnectorClientKey, connectorClient);
+                const result = TeamsInfo.getConnectorClient(context);
+                assert.strictEqual(result, connectorClient);
             });
         });
 

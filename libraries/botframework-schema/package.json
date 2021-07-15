@@ -27,13 +27,15 @@
     }
   },
   "dependencies": {
-    "botbuilder-stdlib": "4.1.6"
+    "botbuilder-stdlib": "4.1.6",
+    "uuid": "^8.3.2"
   },
   "scripts": {
     "build": "tsc -b",
     "postbuild": "downlevel-dts lib _ts3.4/lib --checksum",
     "build:rollup": "yarn clean && yarn build && api-extractor run --verbose --local",
     "clean": "rimraf _ts3.4 lib tsconfig.tsbuildinfo",
+    "depcheck": "depcheck --config ../../.depcheckrc",
     "lint": "eslint . --ext .js,.ts",
     "test": "yarn build && nyc mocha tests/",
     "test:compat": "api-extractor run --verbose"

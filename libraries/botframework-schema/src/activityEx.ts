@@ -3,6 +3,8 @@
  * Licensed under the MIT License.
  */
 
+import { v4 as uuid } from 'uuid';
+
 import {
     IEndOfConversationActivity,
     IEventActivity,
@@ -19,15 +21,18 @@ import {
     IMessageReactionActivity,
     ISuggestionActivity,
 } from './activityInterfaces';
+
 import {
     Activity,
+    ActivityEventNames,
     ActivityTypes,
     ChannelAccount,
-    ConversationReference,
-    Mention,
+    Channels,
     ConversationAccount,
+    ConversationReference,
     ICommandActivity,
     ICommandResultActivity,
+    Mention,
 } from './index';
 
 // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -149,7 +154,7 @@ export namespace ActivityEx {
                 id: source.from ? source.from.id : null,
                 name: source.from ? source.from.name : null,
             } as ChannelAccount,
-            replyToId: source.id,
+            replyToId: getAppropriateReplyToId(source),
             serviceUrl: source.serviceUrl,
             channelId: source.channelId,
             conversation: {
@@ -196,7 +201,7 @@ export namespace ActivityEx {
                 id: source.from ? source.from.id : null,
                 name: source.from ? source.from.name : null,
             } as ChannelAccount,
-            replyToId: source.id,
+            replyToId: getAppropriateReplyToId(source),
             serviceUrl: source.serviceUrl,
             channelId: source.channelId,
             conversation: source.conversation,
@@ -413,18 +418,39 @@ export namespace ActivityEx {
 
     /**
      * Creates a ConversationReference based on the source activity.
+     *
      * @param source The source activity.
      * @returns A conversation reference for the conversation that contains the activity.
      */
     export function getConversationReference(source: Partial<Activity>): ConversationReference {
         return {
-            activityId: source.id,
+            activityId: getAppropriateReplyToId(source),
             bot: source.recipient,
             channelId: source.channelId,
             conversation: source.conversation,
             locale: source.locale,
             serviceUrl: source.serviceUrl,
             user: source.from,
+        };
+    }
+
+    /**
+     * Creates an Activity from conversation reference as it is posted to bot.
+     *
+     * @param reference the conversation reference
+     * @returns the activity
+     */
+    export function getContinuationActivity(reference: Partial<ConversationReference>): Partial<Activity> {
+        return {
+            name: ActivityEventNames.ContinueConversation,
+            id: uuid(),
+            channelId: reference.channelId,
+            locale: reference.locale,
+            serviceUrl: reference.serviceUrl,
+            conversation: reference.conversation,
+            recipient: reference.bot,
+            from: reference.user,
+            relatesTo: reference as ConversationReference,
         };
     }
 
@@ -482,4 +508,15 @@ export namespace ActivityEx {
 
         return result;
     }
+}
+
+function getAppropriateReplyToId(source: Partial<Activity>): string | undefined {
+    if (
+        source.type !== ActivityTypes.ConversationUpdate ||
+        (source.channelId !== Channels.Directline && source.channelId !== Channels.Webchat)
+    ) {
+        return source.id;
+    }
+
+    return undefined;
 }

@@ -3,7 +3,8 @@
  * Licensed under the MIT License.
  */
 
-import { Assertion, Nil, assert } from 'botbuilder-stdlib';
+import { Assertion, Nil, assert, Test } from 'botbuilder-stdlib';
+import { TokenExchangeInvokeRequest } from './tokenExchangeInvokeRequest';
 
 export * from './activityInterfaces';
 export * from './activityEx';
@@ -37,7 +38,7 @@ export const assertAttachmentView: Assertion<AttachmentView> = (value, path) => 
 
 const assertAttachmentViewArray: Assertion<Array<AttachmentView>> = assert.arrayOf(assertAttachmentView);
 
-export const isAttachmentView = assert.toTest(assertAttachmentView);
+export const isAttachmentView: Test<AttachmentView> = assert.toTest(assertAttachmentView);
 
 /**
  * Metadata for an attachment
@@ -2126,7 +2127,7 @@ export enum SemanticActionStateTypes {
 
 /**
  * Defines values for ChannelIds for Channels.
- * Possible values include: 'console', 'cortana', 'directline', 'directlinespeech', 'email',
+ * Possible values include: 'alexa', 'console', 'cortana', 'directline', 'directlinespeech', 'email',
  * 'emulator', 'facebook', 'groupme', 'kik', 'line', 'msteams', 'skype', 'skypeforbusiness',
  * 'slack', 'sms', 'telegram', 'test', 'twilio-sms', 'webchat'
  *
@@ -2134,8 +2135,8 @@ export enum SemanticActionStateTypes {
  * @enum {string}
  */
 export enum Channels {
+    Alexa = 'alexa',
     Console = 'console',
-    Cortana = 'cortana',
     Directline = 'directline',
     DirectlineSpeech = 'directlinespeech',
     Email = 'email',
@@ -2165,6 +2166,7 @@ export enum Channels {
  */
 export enum StatusCodes {
     OK = 200,
+    CREATED = 201,
     MULTIPLE_CHOICES = 300,
     BAD_REQUEST = 400,
     UNAUTHORIZED = 401,
@@ -2187,19 +2189,9 @@ export interface IStatusCodeError {
  * Defines the structure that arrives in the Activity.Value.Authentication for Invoke
  * activity with Name of 'adaptiveCard/action'.
  */
-export interface AdaptiveCardAuthentication {
-    /**
-     * The id of this adaptive card invoke action value's 'authentication'.
-     */
-    id: string;
-    /**
-     * The connection name of the adaptive card authentication.
-     */
-    connectionName: string;
-    /**
-     * The token of the adaptive card authentication.
-     */
-    token: string;
+// eslint-disable-next-line @typescript-eslint/no-empty-interface
+export interface AdaptiveCardAuthentication extends TokenExchangeInvokeRequest {
+    // No-op. This interface was accidentally created as a duplicate of TokenExchangeInvokeRequest but must remain for backwards-compatibility.
 }
 
 /**

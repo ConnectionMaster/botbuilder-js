@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-import * as t from 'runtypes';
+import * as z from 'zod';
 import fs from 'fs';
 import path from 'path';
 import { Configuration } from './configuration';
@@ -21,19 +21,22 @@ import { ServiceCollection } from 'botbuilder-dialogs-adaptive-runtime-core';
 
 import {
     AuthenticationConfiguration,
-    ICredentialProvider,
-    SimpleCredentialProvider,
     allowedCallersClaimsValidator,
+    BotFrameworkAuthentication,
+    ServiceClientCredentialsFactory,
+    ConnectorClientOptions,
 } from 'botframework-connector';
 
 import {
     ActivityHandlerBase,
     BotAdapter,
     BotComponent,
-    BotFrameworkAdapter,
+    BotFrameworkHttpAdapter,
     BotTelemetryClient,
     ChannelServiceHandler,
+    ChannelServiceHandlerBase,
     ChannelServiceRoutes,
+    CloudSkillHandler,
     ConsoleTranscriptLogger,
     ConversationState,
     InspectionMiddleware,
@@ -46,19 +49,22 @@ import {
     ShowTypingMiddleware,
     SkillConversationIdFactory,
     SkillConversationIdFactoryBase,
-    SkillHandler,
-    SkillHttpClient,
     Storage,
     TelemetryLoggerMiddleware,
     TranscriptLoggerMiddleware,
     UserState,
     assertBotComponent,
+    createBotFrameworkAuthenticationFromConfiguration,
 } from 'botbuilder';
 
 function addFeatures(services: ServiceCollection, configuration: Configuration): void {
     services.composeFactory<
         MiddlewareSet,
-        { conversationState: ConversationState; storage: Storage; userState: UserState }
+        {
+            conversationState: ConversationState;
+            storage: Storage;
+            userState: UserState;
+        }
     >(
         'middlewares',
         ['storage', 'conversationState', 'userState'],
@@ -69,10 +75,12 @@ function addFeatures(services: ServiceCollection, configuration: Configuration):
 
             const setSpeak = configuration.type(
                 ['setSpeak'],
-                t.Record({
-                    voiceFontName: t.String.optional(),
-                    fallbackToTextForSpeechIfEmpty: t.Boolean,
-                })
+                z
+                    .object({
+                        voiceFontName: z.string().optional(),
+                        fallbackToTextForSpeechIfEmpty: z.boolean(),
+                    })
+                    .nonstrict()
             );
 
             if (setSpeak) {
@@ -84,10 +92,12 @@ function addFeatures(services: ServiceCollection, configuration: Configuration):
             if (configuration.bool(['traceTranscript'])) {
                 const blobsTranscript = configuration.type(
                     ['blobTranscript'],
-                    t.Record({
-                        connectionString: t.String,
-                        containerName: t.String,
-                    })
+                    z
+                        .object({
+                            connectionString: z.string(),
+                            containerName: z.string(),
+                        })
+                        .nonstrict()
                 );
 
                 middlewareSet.use(
@@ -110,22 +120,28 @@ function addFeatures(services: ServiceCollection, configuration: Configuration):
 }
 
 function addTelemetry(services: ServiceCollection, configuration: Configuration): void {
-    services.addFactory('botTelemetryClient', () => {
+    services.addFactory<BotTelemetryClient>('botTelemetryClient', () => {
         const telemetryOptions = configuration.type(
             ['options'],
-            t
-                .Record({
-                    connectionString: t.String,
-                    instrumentationKey: t.String,
+            z
+                .object({
+                    connectionString: z.string(),
+                    instrumentationKey: z.string(),
                 })
-                .asPartial()
+                .partial()
+                .nonstrict()
         );
 
         const setupString = telemetryOptions?.connectionString ?? telemetryOptions?.instrumentationKey;
         return setupString ? new ApplicationInsightsTelemetryClient(setupString) : new NullTelemetryClient();
     });
 
-    services.addFactory(
+    services.addFactory<
+        Middleware,
+        {
+            botTelemetryClient: BotTelemetryClient;
+        }
+    >(
         'telemetryMiddleware',
         ['botTelemetryClient'],
         ({ botTelemetryClient }) =>
@@ -137,20 +153,31 @@ function addTelemetry(services: ServiceCollection, configuration: Configuration)
 }
 
 function addStorage(services: ServiceCollection, configuration: Configuration): void {
-    services.addFactory('conversationState', ['storage'], ({ storage }) => new ConversationState(storage));
-    services.addFactory('userState', ['storage'], ({ storage }) => new UserState(storage));
+    services.addFactory<ConversationState, { storage: Storage }>(
+        'conversationState',
+        ['storage'],
+        ({ storage }) => new ConversationState(storage)
+    );
 
-    services.addFactory('storage', () => {
+    services.addFactory<UserState, { storage: Storage }>(
+        'userState',
+        ['storage'],
+        ({ storage }) => new UserState(storage)
+    );
+
+    services.addFactory<Storage>('storage', () => {
         const storage = configuration.string(['runtimeSettings', 'storage']);
 
         switch (storage) {
             case 'BlobsStorage': {
                 const blobsStorage = configuration.type(
                     ['BlobsStorage'],
-                    t.Record({
-                        connectionString: t.String,
-                        containerName: t.String,
-                    })
+                    z
+                        .object({
+                            connectionString: z.string(),
+                            containerName: z.string(),
+                        })
+                        .nonstrict()
                 );
 
                 if (!blobsStorage) {
@@ -163,15 +190,17 @@ function addStorage(services: ServiceCollection, configuration: Configuration): 
             case 'CosmosDbPartitionedStorage': {
                 const cosmosOptions = configuration.type(
                     ['CosmosDbPartitionedStorage'],
-                    t.Record({
-                        authKey: t.String.optional(),
-                        compatibilityMode: t.Boolean.optional(),
-                        containerId: t.String,
-                        containerThroughput: t.Number.optional(),
-                        cosmosDBEndpoint: t.String.optional(),
-                        databaseId: t.String,
-                        keySuffix: t.String.optional(),
-                    })
+                    z
+                        .object({
+                            authKey: z.string().optional(),
+                            compatibilityMode: z.boolean().optional(),
+                            containerId: z.string(),
+                            containerThroughput: z.number().optional(),
+                            cosmosDBEndpoint: z.string().optional(),
+                            databaseId: z.string(),
+                            keySuffix: z.string().optional(),
+                        })
+                        .nonstrict()
                 );
 
                 if (!cosmosOptions) {
@@ -179,7 +208,10 @@ function addStorage(services: ServiceCollection, configuration: Configuration): 
                 }
 
                 const { cosmosDBEndpoint, ...rest } = cosmosOptions;
-                return new CosmosDbPartitionedStorage({ ...rest, cosmosDbEndpoint: cosmosDBEndpoint });
+                return new CosmosDbPartitionedStorage({
+                    ...rest,
+                    cosmosDbEndpoint: cosmosDBEndpoint,
+                });
             }
 
             default:
@@ -189,57 +221,63 @@ function addStorage(services: ServiceCollection, configuration: Configuration): 
 }
 
 function addSkills(services: ServiceCollection, configuration: Configuration): void {
-    services.addFactory(
+    services.addFactory<SkillConversationIdFactoryBase, { storage: Storage }>(
         'skillConversationIdFactory',
         ['storage'],
         ({ storage }) => new SkillConversationIdFactory(storage)
     );
 
-    services.addFactory<ICredentialProvider>(
-        'credentialProvider',
-        () =>
-            new SimpleCredentialProvider(
-                configuration.string(['MicrosoftAppId']) ?? '',
-                configuration.string(['MicrosoftAppPassword']) ?? ''
-            )
-    );
-
-    services.addFactory(
-        'skillClient',
-        ['credentialProvider', 'skillConversationIdFactory'],
-        ({ credentialProvider, skillConversationIdFactory }) =>
-            new SkillHttpClient(credentialProvider, skillConversationIdFactory)
-    );
-
-    services.addFactory('authenticationConfiguration', () => {
+    services.addFactory<AuthenticationConfiguration>('authenticationConfiguration', () => {
         const allowedCallers =
-            configuration.type(['runtimeSettings', 'skills', 'allowedCallers'], t.Array(t.String)) ?? [];
+            configuration.type(['runtimeSettings', 'skills', 'allowedCallers'], z.array(z.string())) ?? [];
 
-        return new AuthenticationConfiguration(
-            undefined,
-            allowedCallers.length ? allowedCallersClaimsValidator(allowedCallers) : undefined
+        const skills = Object.values(
+            configuration.type(
+                ['skills'],
+                z.record(
+                    z
+                        .object({
+                            msAppId: z.string(),
+                        })
+                        .nonstrict()
+                )
+            ) ?? {}
         );
+
+        if (skills.length) {
+            // If the config entry for "skills" is present then we are a consumer and the entries under
+            // runtimeSettings.sills are ignored
+            return new AuthenticationConfiguration(
+                undefined,
+                allowedCallersClaimsValidator(skills.map((skill) => skill.msAppId))
+            );
+        } else {
+            // If the config entry for runtimeSettings.skills.allowedCallers contains entries, then we are a skill and
+            // we validate caller against this list
+            return new AuthenticationConfiguration(
+                undefined,
+                allowedCallers.length ? allowedCallersClaimsValidator(allowedCallers) : undefined
+            );
+        }
     });
 
     services.addFactory<
-        ChannelServiceHandler,
+        ChannelServiceHandlerBase,
         {
             adapter: BotAdapter;
-            authenticationConfiguration: AuthenticationConfiguration;
             bot: ActivityHandlerBase;
-            credentialProvider: ICredentialProvider;
+            botFrameworkAuthentication: BotFrameworkAuthentication;
             skillConversationIdFactory: SkillConversationIdFactoryBase;
         }
     >(
         'channelServiceHandler',
-        ['adapter', 'bot', 'skillConversationIdFactory', 'credentialProvider', 'authenticationConfiguration'],
+        ['adapter', 'bot', 'botFrameworkAuthentication', 'skillConversationIdFactory'],
         (dependencies) =>
-            new SkillHandler(
+            new CloudSkillHandler(
                 dependencies.adapter,
-                dependencies.bot,
+                (context) => dependencies.bot.run(context),
                 dependencies.skillConversationIdFactory,
-                dependencies.credentialProvider,
-                dependencies.authenticationConfiguration
+                dependencies.botFrameworkAuthentication
             )
     );
 
@@ -252,6 +290,32 @@ function addSkills(services: ServiceCollection, configuration: Configuration): v
 
 function addCoreBot(services: ServiceCollection, configuration: Configuration): void {
     services.addFactory<
+        BotFrameworkAuthentication,
+        {
+            authenticationConfiguration: AuthenticationConfiguration;
+            botFrameworkClientFetch?: (input: RequestInfo, init?: RequestInit) => Promise<Response>;
+            connectorClientOptions?: ConnectorClientOptions;
+            serviceClientCredentialsFactory?: ServiceClientCredentialsFactory;
+        }
+    >(
+        'botFrameworkAuthentication',
+        [
+            'authenticationConfiguration',
+            'botFrameworkClientFetch',
+            'connectorClientOptions',
+            'serviceClientCredentialsFactory',
+        ],
+        (dependencies) =>
+            createBotFrameworkAuthenticationFromConfiguration(
+                configuration,
+                dependencies.serviceClientCredentialsFactory,
+                dependencies.authenticationConfiguration,
+                dependencies.botFrameworkClientFetch,
+                dependencies.connectorClientOptions
+            )
+    );
+
+    services.addFactory<
         ActivityHandlerBase,
         {
             botTelemetryClient: BotTelemetryClient;
@@ -259,7 +323,7 @@ function addCoreBot(services: ServiceCollection, configuration: Configuration): 
             memoryScopes: MemoryScope[];
             pathResolvers: PathResolver[];
             resourceExplorer: ResourceExplorer;
-            skillClient: SkillHttpClient;
+            botFrameworkAuthentication: BotFrameworkAuthentication;
             skillConversationIdFactory: SkillConversationIdFactoryBase;
             userState: UserState;
         }
@@ -271,7 +335,7 @@ function addCoreBot(services: ServiceCollection, configuration: Configuration): 
             'memoryScopes',
             'pathResolvers',
             'resourceExplorer',
-            'skillClient',
+            'botFrameworkAuthentication',
             'skillConversationIdFactory',
             'userState',
         ],
@@ -280,7 +344,7 @@ function addCoreBot(services: ServiceCollection, configuration: Configuration): 
                 dependencies.resourceExplorer,
                 dependencies.userState,
                 dependencies.conversationState,
-                dependencies.skillClient,
+                dependencies.botFrameworkAuthentication,
                 dependencies.skillConversationIdFactory,
                 dependencies.botTelemetryClient,
                 configuration.string(['defaultLocale']) ?? 'en-us',
@@ -291,9 +355,9 @@ function addCoreBot(services: ServiceCollection, configuration: Configuration): 
     );
 
     services.addFactory<
-        BotFrameworkAdapter,
+        BotFrameworkHttpAdapter,
         {
-            authenticationConfiguration: AuthenticationConfiguration;
+            botFrameworkAuthentication: BotFrameworkAuthentication;
             conversationState: ConversationState;
             middlewares: MiddlewareSet;
             telemetryMiddleware: Middleware;
@@ -301,22 +365,15 @@ function addCoreBot(services: ServiceCollection, configuration: Configuration): 
         }
     >(
         'adapter',
-        ['authenticationConfiguration', 'conversationState', 'userState', 'middlewares', 'telemetryMiddleware'],
-        (dependencies) => {
-            const appId = configuration.string(['MicrosoftAppId']);
-            const appPassword = configuration.string(['MicrosoftAppPassword']);
-
-            const adapter = new CoreBotAdapter(
-                { appId, appPassword, authConfig: dependencies.authenticationConfiguration },
+        ['botFrameworkAuthentication', 'conversationState', 'userState', 'middlewares', 'telemetryMiddleware'],
+        (dependencies) =>
+            new CoreBotAdapter(
+                dependencies.botFrameworkAuthentication,
                 dependencies.conversationState,
                 dependencies.userState
-            );
-
-            adapter.use(dependencies.middlewares);
-            adapter.use(dependencies.telemetryMiddleware);
-
-            return adapter;
-        }
+            )
+                .use(dependencies.middlewares)
+                .use(dependencies.telemetryMiddleware)
     );
 }
 
@@ -341,28 +398,35 @@ async function addSettingsBotComponents(services: ServiceCollection, configurati
     const components =
         configuration.type(
             ['runtimeSettings', 'components'],
-            t.Array(
-                t.Record({
-                    name: t.String,
-                    settingsPrefix: t.String.optional(),
-                })
+            z.array(
+                z
+                    .object({
+                        name: z.string(),
+                        settingsPrefix: z.string().optional(),
+                    })
+                    .nonstrict()
             )
         ) ?? [];
 
-    const errs: Error[] = [];
+    const loadErrors: Array<{ error: Error; name: string }> = [];
 
     for (const { name, settingsPrefix } of components) {
         try {
             const botComponent = await loadBotComponent(name);
 
             botComponent.configureServices(services, configuration.bind([settingsPrefix ?? name]));
-        } catch (err) {
-            errs.push(err);
+        } catch (error) {
+            loadErrors.push({ error, name });
         }
     }
 
-    if (errs.length) {
-        throw new Error(errs.map((err) => `[${err}]`).join(', '));
+    if (loadErrors.length) {
+        loadErrors.forEach(({ name, error }) =>
+            console.warn(
+                `${name} failed to load. Consider removing this component from the list of components in your application settings.`,
+                error
+            )
+        );
     }
 }
 
@@ -395,7 +459,7 @@ function addComposerConfiguration(configuration: Configuration): void {
     const qnaRegion = configuration.string(['qna', 'qnaRegion']) || 'westus';
     configuration.file(path.join(botRoot, 'generated', `qnamaker.settings.${environment}.${qnaRegion}.json`), true);
 
-    configuration.file(path.join(botRoot, 'generated', `orchestrator.settings.json`), true);
+    configuration.file(path.join(botRoot, 'generated', 'orchestrator.settings.json'), true);
 }
 
 async function normalizeConfiguration(configuration: Configuration, applicationRoot: string): Promise<void> {
@@ -437,24 +501,58 @@ function registerQnAComponents(services: ServiceCollection, configuration: Confi
  * Construct all runtime services.
  *
  * @param applicationRoot absolute path to root of application
- * @param configuration a fully initialized configuration instance to use
+ * @param settingsDirectory directory where settings files are located
  * @returns service collection and configuration
+ *
+ * @remarks
+ * While the full set of dependencies is designed to be sufficient to run Adaptive Dialogs,
+ * the `"bot"` dependency can actually be any [ActivityHandler](xref:botbuilder-core.ActivityHandler)
+ * implementation and is not constrained to one that uses Adaptive Dialogs. Any Bot Framework project
+ * can therefore be simplified by just using this function along with a custom
+ * [ActivityHandler](xref:botbuilder-core.ActivityHandler) implementation.
+ *
+ * Aspects of the behavior of a number of these dependencies, including those that can be overriden,
+ * can be controlled through configuration.
+ *
+ * The default [ResourceExplorer](xref:botbuilder-dialogs-declarative.ResourceExplorer) uses the file
+ * system. The `applicationRoot` folder is used as the root directory.
+ *
+ * If not overridden, the exact type of [Storage](xref:botbuilder-core.Storage) added depends on configuration.
+ * With no configuration, the default is memory storage. It should be noted that
+ * [MemoryStorage](xref:botbuilder-core.MemoryStorage) is designed primarily for testing with a single host
+ * running the bot and no durable storage.
+ *
+ * The default Skills implementation can be constrained in terms of allowed callers through configuration.
+ * Refer to the product documentation for further details.
+ *
+ * The default [BotTelemetryClient](xref:botbuilder-core.BotTelemetryClient) implementation uses AppInsights
+ * and aspects of what is included in the telemetry data recorded can be controller through configuration.
+ * Refer to the product documentation for further details.
+ *
+ * A number of the features of the runtime are implemented through middleware. Various feature flags in
+ * configuration determine whether these middleware are added at runtime, the settings include:
+ * UseInspection, ShowTyping and SetSpeak.
+ *
+ * These control the addition of:
+ * [InspectionMiddleware](xref:botbuilder.InspectionMiddleware),
+ * [ShowTypingMiddleware](xref:botbuilder-core.ShowTypingMiddleware), and
+ * [SetSpeakMiddleware](xref:botbuilder.SetSpeakMiddleware) respectively.
  */
 export async function getRuntimeServices(
     applicationRoot: string,
-    configuration: Configuration
+    settingsDirectory: string
 ): Promise<[ServiceCollection, Configuration]>;
 
 /**
  * Construct all runtime services.
  *
  * @param applicationRoot absolute path to root of application
- * @param settingsDirectory directory where settings files are located
+ * @param configuration a fully initialized configuration instance to use
  * @returns service collection and configuration
  */
 export async function getRuntimeServices(
     applicationRoot: string,
-    settingsDirectory: string
+    configuration: Configuration
 ): Promise<[ServiceCollection, Configuration]>;
 
 /**
@@ -486,11 +584,14 @@ export async function getRuntimeServices(
     }
 
     const services = new ServiceCollection({
+        botFrameworkClientFetch: undefined,
+        connectorClientOptions: undefined,
         customAdapters: new Map(),
         declarativeTypes: [],
         memoryScopes: [],
         middlewares: new MiddlewareSet(),
         pathResolvers: [],
+        serviceClientCredentialsFactory: undefined,
     });
 
     services.addFactory<ResourceExplorer, { declarativeTypes: ComponentDeclarativeTypes[] }>(

@@ -81,11 +81,18 @@
     "jsdoc/require-param-type": "off",
     "jsdoc/require-returns": "error",
     "jsdoc/require-returns-type": "off",
-    "lodash/import-scope": [2],
+    "lodash/import-scope": ["error"],
     "no-unused-vars": "off",
     "no-var": "error",
     "prefer-const": "error",
     "prettier/prettier": "error",
+    "quotes": [
+      "error",
+      "single",
+      {
+        "avoidEscape": true
+      }
+    ],
     "security/detect-object-injection": "off"
   },
   "overrides": [
@@ -122,6 +129,18 @@
       },
       "rules": {
         "@typescript-eslint/no-var-requires": "off"
+      }
+    },
+    {
+      "files": [
+        "libraries/botbuilder-ai*/**/*.ts",
+        "libraries/botbuilder-applicationinsights/**/*.ts",
+        "libraries/botbuilder-azure*/**/*.ts",
+        "libraries/botbuilder-dialogs-adaptive-runtime*/**/*.ts",
+        "libraries/botframework-streaming/**/*.ts"
+      ],
+      "rules": {
+          "@typescript-eslint/explicit-member-accessibility": ["error", { "accessibility": "no-public" }]
       }
     }
   ]

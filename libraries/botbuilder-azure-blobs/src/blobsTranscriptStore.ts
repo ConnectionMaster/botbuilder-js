@@ -1,10 +1,10 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+import * as z from 'zod';
 import getStream from 'get-stream';
 import pmap from 'p-map';
-import { Activity, PagedResult, TranscriptInfo, TranscriptStore, assertActivity } from 'botbuilder-core';
-import { assert } from 'botbuilder-stdlib';
+import { Activity, PagedResult, TranscriptInfo, TranscriptStore } from 'botbuilder-core';
 import { maybeCast } from 'botbuilder-stdlib/lib/maybeCast';
 import { sanitizeBlobKey } from './sanitizeBlobKey';
 
@@ -34,12 +34,13 @@ function getConversationPrefix(channelId: string, conversationId: string): strin
 
 // Formats an activity as a blob key
 function getBlobKey(activity: Activity): string {
-    assert.date(activity.timestamp, ['activity', 'timestamp']);
+    const { timestamp } = z
+        .object({ timestamp: z.instanceof(Date) })
+        .nonstrict()
+        .parse(activity);
 
     return sanitizeBlobKey(
-        [activity.channelId, activity.conversation.id, `${formatTicks(activity.timestamp)}-${activity.id}.json`].join(
-            '/'
-        )
+        [activity.channelId, activity.conversation.id, `${formatTicks(timestamp)}-${activity.id}.json`].join('/')
     );
 }
 
@@ -71,15 +72,17 @@ export class BlobsTranscriptStore implements TranscriptStore {
     private _initializePromise?: Promise<unknown>;
 
     /**
-     * Constructs a BlobsStorage instance.
+     * Constructs a BlobsTranscriptStore instance.
      *
      * @param {string} connectionString Azure Blob Storage connection string
      * @param {string} containerName Azure Blob Storage container name
      * @param {BlobsTranscriptStoreOptions} options Other options for BlobsTranscriptStore
      */
     constructor(connectionString: string, containerName: string, options?: BlobsTranscriptStoreOptions) {
-        assert.string(connectionString, ['connectionString']);
-        assert.string(containerName, ['containerName']);
+        z.object({ connectionString: z.string(), containerName: z.string() }).parse({
+            connectionString,
+            containerName,
+        });
 
         this._containerClient = new ContainerClient(connectionString, containerName, options?.storagePipelineOptions);
 
@@ -87,6 +90,11 @@ export class BlobsTranscriptStore implements TranscriptStore {
         if (connectionString.trim() === 'UseDevelopmentStorage=true;') {
             this._concurrency = 1;
         }
+    }
+
+    // Protects against JSON.stringify cycles
+    private toJSON(): unknown {
+        return { name: 'BlobsTranscriptStore' };
     }
 
     private _initialize(): Promise<unknown> {
@@ -112,8 +120,7 @@ export class BlobsTranscriptStore implements TranscriptStore {
         continuationToken?: string,
         startDate?: Date
     ): Promise<PagedResult<Activity>> {
-        assert.string(channelId, ['channelId']);
-        assert.string(conversationId, ['conversationId']);
+        z.object({ channelId: z.string(), conversationId: z.string() }).parse({ channelId, conversationId });
 
         await this._initialize();
 
@@ -182,7 +189,7 @@ export class BlobsTranscriptStore implements TranscriptStore {
      * [PagedResult](xref:botbuilder-core.PagedResult) of [Activity](xref:botbuilder-core.Activity) items
      */
     async listTranscripts(channelId: string, continuationToken?: string): Promise<PagedResult<TranscriptInfo>> {
-        assert.string(channelId, ['channelId']);
+        z.object({ channelId: z.string() }).parse({ channelId });
 
         await this._initialize();
 
@@ -217,8 +224,7 @@ export class BlobsTranscriptStore implements TranscriptStore {
      * @returns {Promise<void>} A promise representing the async operation.
      */
     async deleteTranscript(channelId: string, conversationId: string): Promise<void> {
-        assert.string(channelId, ['channelId']);
-        assert.string(conversationId, ['conversationId']);
+        z.object({ channelId: z.string(), conversationId: z.string() }).parse({ channelId, conversationId });
 
         await this._initialize();
 
@@ -251,7 +257,7 @@ export class BlobsTranscriptStore implements TranscriptStore {
      * @returns {Promise<void>} A promise representing the async operation.
      */
     async logActivity(activity: Activity): Promise<void> {
-        assertActivity(activity, ['activity']);
+        z.object({ activity: z.record(z.unknown()) }).parse({ activity });
 
         await this._initialize();
 

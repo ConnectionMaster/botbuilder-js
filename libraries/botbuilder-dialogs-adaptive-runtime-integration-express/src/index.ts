@@ -1,18 +1,19 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-import * as t from 'runtypes';
-import express from 'express';
+import * as z from 'zod';
+import express, { Application } from 'express';
 import path from 'path';
+import type { ActivityHandlerBase, BotFrameworkHttpAdapter, ChannelServiceRoutes } from 'botbuilder';
 import type { Server } from 'http';
-import type { ActivityHandlerBase, BotFrameworkAdapter, ChannelServiceRoutes } from 'botbuilder';
-import { Configuration, getRuntimeServices } from 'botbuilder-dialogs-adaptive-runtime';
 import type { ServiceCollection } from 'botbuilder-dialogs-adaptive-runtime-core';
+import { Configuration, getRuntimeServices } from 'botbuilder-dialogs-adaptive-runtime';
+import { json, urlencoded } from 'body-parser';
 
 // Explicitly fails checks for `""`
-const NonEmptyString = t.String.withConstraint((str) => str.length > 0 || 'must be non-empty string');
+const NonEmptyString = z.string().refine((str) => str.length > 0, { message: 'must be non-empty string' });
 
-const TypedOptions = t.Record({
+const TypedOptions = z.object({
     /**
      * Path that the server will listen to for [Activities](xref:botframework-schema.Activity)
      */
@@ -26,12 +27,12 @@ const TypedOptions = t.Record({
     /**
      * Port that server should listen on
      */
-    port: t.Union(NonEmptyString, t.Number),
+    port: z.union([NonEmptyString, z.number()]),
 
     /**
      * Log errors to stderr
      */
-    logErrors: t.Boolean,
+    logErrors: z.boolean(),
 
     /**
      * Path inside applicationRoot that should be served as static files
@@ -42,7 +43,7 @@ const TypedOptions = t.Record({
 /**
  * Options for runtime Express adapter
  */
-export type Options = t.Static<typeof TypedOptions>;
+export type Options = z.infer<typeof TypedOptions>;
 
 const defaultOptions: Options = {
     logErrors: true,
@@ -91,8 +92,8 @@ export async function makeApp(
     configuration: Configuration,
     applicationRoot: string,
     options: Partial<Options> = {},
-    app = express()
-): Promise<[app: express.Application, listen: (callback?: () => void) => Server]> {
+    app: Application = express()
+): Promise<[Application, (callback?: () => void) => Server]> {
     const configOverrides: Partial<Options> = {};
 
     const port = ['port', 'PORT'].map((key) => configuration.string([key])).find((port) => port !== undefined);
@@ -100,24 +101,32 @@ export async function makeApp(
         configOverrides.port = port;
     }
 
-    const resolvedOptions = TypedOptions.check(Object.assign({}, defaultOptions, configOverrides, options));
+    const resolvedOptions = TypedOptions.parse(Object.assign({}, defaultOptions, configOverrides, options));
 
     const errorHandler = (err: Error | string, res?: express.Response): void => {
-        if (options.logErrors) {
+        if (resolvedOptions.logErrors) {
             console.error(err);
         }
 
         if (res && !res.headersSent) {
-            res.status(500).json({ message: 'Internal server error' });
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const statusCode = typeof (err as any)?.statusCode === 'number' ? (err as any).statusCode : 500;
+
+            res.status(statusCode).json({
+                message: err instanceof Error ? err.message : err ?? 'Internal server error',
+            });
         }
     };
 
     const { adapter, bot, channelServiceRoutes, customAdapters } = services.mustMakeInstances<{
-        adapter: BotFrameworkAdapter;
+        adapter: BotFrameworkHttpAdapter;
         bot: ActivityHandlerBase;
         channelServiceRoutes: ChannelServiceRoutes;
-        customAdapters: Map<string, BotFrameworkAdapter>;
+        customAdapters: Map<string, BotFrameworkHttpAdapter>;
     }>('adapter', 'bot', 'channelServiceRoutes', 'customAdapters');
+
+    app.use(urlencoded({ extended: false }));
+    app.use(json());
 
     app.use(
         express.static(path.join(applicationRoot, resolvedOptions.staticDirectory), {
@@ -132,7 +141,7 @@ export async function makeApp(
 
     app.post(resolvedOptions.messagingEndpointPath, async (req, res) => {
         try {
-            await adapter.processActivity(req, res, async (turnContext) => {
+            await adapter.process(req, res, async (turnContext) => {
                 await bot.run(turnContext);
             });
         } catch (err) {
@@ -145,11 +154,11 @@ export async function makeApp(
     const adapters =
         configuration.type(
             ['runtimeSettings', 'adapters'],
-            t.Array(
-                t.Record({
-                    name: t.String,
-                    enabled: t.Boolean.optional(),
-                    route: t.String,
+            z.array(
+                z.object({
+                    name: z.string(),
+                    enabled: z.boolean().optional(),
+                    route: z.string(),
                 })
             )
         ) ?? [];
@@ -161,7 +170,7 @@ export async function makeApp(
             if (adapter) {
                 app.post(`/api/${settings.route}`, async (req, res) => {
                     try {
-                        await adapter.processActivity(req, res, async (turnContext) => {
+                        await adapter.process(req, res, async (turnContext) => {
                             await bot.run(turnContext);
                         });
                     } catch (err) {
@@ -185,10 +194,10 @@ export async function makeApp(
             );
 
             server.on('upgrade', async (req, socket, head) => {
-                const adapter = services.mustMakeInstance<BotFrameworkAdapter>('adapter');
+                const adapter = services.mustMakeInstance<BotFrameworkHttpAdapter>('adapter');
 
                 try {
-                    await adapter.useWebSocket(req, socket, head, async (context) => {
+                    await adapter.process(req, socket, head, async (context) => {
                         await bot.run(context);
                     });
                 } catch (err) {

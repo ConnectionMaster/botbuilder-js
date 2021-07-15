@@ -114,6 +114,11 @@ export class ApplicationInsightsTelemetryClient implements BotTelemetryClient, B
         this.client.addTelemetryProcessor(addBotIdentifiers);
     }
 
+    // Protects against JSON.stringify cycles
+    private toJSON(): unknown {
+        return { name: 'ApplicationInsightsTelemetryClient' };
+    }
+
     /**
      * Provides access to the Application Insights configuration that is running here.
      * Allows developers to adjust the options, for example:
@@ -139,7 +144,7 @@ export class ApplicationInsightsTelemetryClient implements BotTelemetryClient, B
      *
      * @param telemetry The [TelemetryDependency](xref:botbuilder-core.TelemetryDependency) to track.
      */
-    public trackDependency(telemetry: TelemetryDependency): void {
+    trackDependency(telemetry: TelemetryDependency): void {
         this.defaultClient.trackDependency(telemetry);
     }
 
@@ -148,7 +153,7 @@ export class ApplicationInsightsTelemetryClient implements BotTelemetryClient, B
      *
      * @param telemetry The [TelemetryEvent](xref:botbuilder-core.TelemetryEvent) to track.
      */
-    public trackEvent(telemetry: TelemetryEvent): void {
+    trackEvent(telemetry: TelemetryEvent): void {
         const { name, properties, metrics: measurements } = telemetry;
         this.defaultClient.trackEvent({ name, properties, measurements });
     }
@@ -158,7 +163,7 @@ export class ApplicationInsightsTelemetryClient implements BotTelemetryClient, B
      *
      * @param telemetry The [TelemetryException](xref:botbuilder-core.TelemetryException) to track.
      */
-    public trackException(telemetry: TelemetryException): void {
+    trackException(telemetry: TelemetryException): void {
         this.defaultClient.trackException(telemetry);
     }
 
@@ -167,7 +172,7 @@ export class ApplicationInsightsTelemetryClient implements BotTelemetryClient, B
      *
      * @param telemetry The [TelemetryTrace](xref:botbuilder-core.TelemetryTrace) to track.
      */
-    public trackTrace(telemetry: TelemetryTrace): void {
+    trackTrace(telemetry: TelemetryTrace): void {
         this.defaultClient.trackTrace(telemetry);
     }
 
@@ -176,14 +181,14 @@ export class ApplicationInsightsTelemetryClient implements BotTelemetryClient, B
      *
      * @param telemetry The [TelemetryPageView](xref:botbuilder-core.TelemetryPageView) to track.
      */
-    public trackPageView(telemetry: TelemetryPageView): void {
+    trackPageView(telemetry: TelemetryPageView): void {
         this.defaultClient.trackPageView(telemetry);
     }
 
     /**
      * Flushes the in-memory buffer and any metrics being pre-aggregated.
      */
-    public flush(): void {
+    flush(): void {
         this.defaultClient.flush();
     }
 }
